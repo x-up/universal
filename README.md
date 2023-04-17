@@ -6,7 +6,7 @@ loadstring(syn.request({Url = "https://raw.githubusercontent.com/x-up/universal/
 
 * If there are any detections, or you want to suggest features, ping x_up#0001 in #dev-general of the v3 server.
 
-# To Do:
+# To do:
 * Add an aimbot module
 * Fix Phantom Forces support
 
