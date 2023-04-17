@@ -1,3 +1,4 @@
+if not DrawFont then return error'you need v3 for this script' end
 --// start esp
 if getgenv().Destroy then Destroy() end
 local startTime = tick()
