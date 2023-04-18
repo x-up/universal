@@ -11,6 +11,7 @@ local mouse = localPlayer:GetMouse()
 local runService = game:GetService("RunService")
 
 local camera = game:GetService("Workspace").CurrentCamera
+local getPartsObscuringTarget = camera.getPartsObscuringTarget; getPartsObscuringTarget = function(...) getPartsObscuringTarget(camera, ...) end
 local viewportSize = camera.ViewportSize
 
 local highlightFolder = Instance.new("Folder"); highlightFolder.Name = syn.crypto.random(math.random(12, 16)); highlightFolder.Parent = gethui()
@@ -113,29 +114,6 @@ getgenv().Destroy = function()
 
 	if window then window:Remove() end
 	unloaded = true
-end
-
-local function onScreen(vec2) return vec2.X > 0 and vec2.X < viewportSize.X and vec2.Y > 0 and vec2.Y < viewportSize.Y end
-local function wts(part)
-	local screenPoint = worldtoscreen({part.Position})[1]
-	return screenPoint, onScreen(screenPoint)
-end
-
-local function getClosestPlayer(mindis)
-	local closestDistance, closestPlayer = mindis or 9e9, nil
-
-   	for i,v in playerList do
-		if v.Player and v.RootPart then
-			local screenPos, vis = wts(v.RootPart)
-			local distanceFromMouse = (Vector2.new(mouse.X, mouse.Y + 36) - Vector2.new(screenPos.X, screenPos.Y + 36)).Magnitude
-			if distanceFromMouse <= closestDistance and vis then
-				closestPlayer = v
-				closestDistance = Vec2Distance
-			end
-		end
-	end
-	
-	return closestPlayer
 end
 
 local actor, actorEvent; if games.PF then
@@ -250,8 +228,6 @@ local Player = {}; do
 	Player.__index = Player
 
 	function Player.new(player)
-		if player == localPlayer then return end
-
 		local self = {}; setmetatable(self, Player)
 
 		self.Player = player
@@ -412,6 +388,7 @@ local Player = {}; do
 	end
 
 	function Player:SetupESP()
+		if self.Player == localplayer then return end
 		--// create points
 		local rootPartPoint = PointInstance.new(self.RootPart)
 
@@ -630,31 +607,69 @@ local Player = {}; do
 		self.Highlight:Destroy()
 	end
 end
-
-table.insert(connects, players.PlayerAdded:Connect(Player.new)); for _,v in players:GetPlayers() do task.spawn(Player.new, v) end
-table.insert(connects, camera:GetPropertyChangedSignal("ViewportSize"):Connect(function()
-	viewportSize = camera.ViewportSize
-	for i,v in playerList do
-		v:UpdateTracerLine()
-	end
-end))
-
-runService:BindToRenderStep("x_upESP", 200, function()
-	for i,v in playerList do
-		v:Update()
-	end
-end)
 --// end esp
 
 
+
+--// start aimbot
 local Aimbot = {}; do 
 	Aimbot.__index = Aimbot
 
 	function Aimbot.new()
+		local self = {}; setmetatable(self, Aimbot)
+
 		self.ClosestPlayer = nil;
+
+		return self
+	end
+
+	function Aimbot:IsOnScreen(vector2)
+		if typeof(vector2) == "Instance" and vector2:IsA("Part") then vector2 = self:WorldToScreen(vector2) end
+		return vector2.X > 0 and vector2.X < viewportSize.X and vector2.Y > 0 and vector2.Y < viewportSize.Y
+	end
+
+	function Aimbot:WorldToScreen(part)
+		local screenPoint = worldtoscreen({part.Position})[1]
+		return screenPoint, self:IsOnScreen(screenPoint)
+	end
+
+	function Aimbot:Wallcheck(player)
+		local localPlayerObj = playerlist[localPlayer.Name]; if not localPlayerObj or not localPlayerObj.RootPart then return false end
+		local enemyPlayerObj = playerlist[player.Name]; if not enemyPlayerObj then return false end
+
+		local localCharacter = lPlayerObj.Character; if not localCharacter then return false end
+		local enemyCharacter = enemyPlayerObj.Character; if not enemyCharacter then return false end
+
+		local list = {localCharacter, enemyCharacter}
+		local obscuringTargets = getPartsObscuringTarget(list, list)
+
+		return not #obscuringTargets <= 1
+	end
+	
+	function Aimbot:GetClosestPlayer(minDistance)
+		local closestDistance, closestPlayer = minDistance or 9e9, nil
+
+		for i,v in playerList do
+			if v.Player and v.RootPart then
+				if aimbotSettings.Wallcheck and self:Wallcheck(v.Player) then continue end 
+				local screenPos, vis = self:WorldToScreen(v.RootPart)
+				local distanceFromMouse = (Vector2.new(mouse.X, mouse.Y + 36) - Vector2.new(screenPos.X, screenPos.Y + 36)).Magnitude
+				if distanceFromMouse <= closestDistance and vis then
+					closestPlayer = v
+					closestDistance = closestDistance
+				end
+			end
+		end
+		
+		return closestPlayer
+	end
+
+	function Aimbot:AimTowardsPart(part)
 		
 	end
 end
+--// end aimbot
+
 
 
 
@@ -1027,6 +1042,25 @@ end))
 --// end keybinds
 
 --// end ui
+
+
+
+--// connects
+table.insert(connects, players.PlayerAdded:Connect(Player.new)); for _,v in players:GetPlayers() do task.spawn(Player.new, v) end
+table.insert(connects, camera:GetPropertyChangedSignal("ViewportSize"):Connect(function()
+	viewportSize = camera.ViewportSize
+	for i,v in playerList do
+		v:UpdateTracerLine()
+	end
+end))
+
+runService:BindToRenderStep("x_upESP", 200, function()
+	for i,v in playerList do
+		v:Update()
+	end
+end)
+--// end connects
+
 
 
 syn.toast_notification({
