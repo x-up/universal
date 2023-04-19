@@ -143,26 +143,34 @@ if games.PF then do
 		syn.run_on_actor(actor, [[
 			local connects = {}
 
-			local req = getrenv().shared.require
-			local playerStatusEvents = req("PlayerStatusEvents")
-			local repInterface = req("ReplicationInterface")
-			local repEvents = req("ReplicationEvents")
-
 			local actorEvent = getluastate(actor).Event
-			local function getCharacterModel(plr)
-				local plrEntry = repInterface.getEntry(plr)
-				if not plrEntry then return end
-				return (plrEntry:isAlive() and plrEntry:getThirdPersonObject():getCharacterModel().Name ~= "Dead") and plrEntry:getThirdPersonObject():getCharacterModel()
+
+			local req = getrenv().shared.require
+			local modules = debug.getupvalue(req, 1); if not modules then return error'no pf modules' end
+			local _cache = rawget(modules, "_cache"); if not _cache then return error'no pf _cache' end
+			local playerStatusEvents = rawget(_cache, "PlayerStatusEvents"); if not playerStatusEvents then return error'no pf pSE' end
+			local repInterface = rawget(_cache, "ReplicationInterface"); if not repInterface then return error'no pf rI' end
+			local repEvents = rawget(_cache, "ReplicationEvents"); if not repEvents then return error'no pf rE' end
+
+			local playerTable = debug.getupvalue(rawget(repInterface, "getEntry"), 1); if not playerTable then return 'no pf pT' end
+
+			local function getEntry(plr) return playerTable[plr] end
+
+			local function isAlive(entry) return rawget(entry, "_alive") end
+
+			local function getCharacterModel(entry)
+				if typeof(entry) == "Instance" and entry:IsA("Player") then entry = getEntry(entry) end; if not entry then return end
+				return isAlive(entry) and rawget(rawget(entry, "_thirdPersonObject"), "_character")
 			end
 
-			local function getPlayerHealth(plr)
-				local plrEntry = repInterface.getEntry(plr)
-				if not plrEntry then return end
-				return plrEntry:isAlive() and plrEntry:getHealth() or nil
+			local function getPlayerHealth(entry)
+				if typeof(entry) == "Instance" and entry:IsA("Player") then entry = getEntry(entry) end; if not entry then return end
+				local healthState = rawget(entry, "_healthstate"); if not healthState then return 0, 100 end
+				return rawget(healthState, "health0"), rawget(healthState, "maxhealth")
 			end
 
 			connects["pfActorEvent"] = actorEvent:Connect(function(plr, ret)
-				local plrEntry = repInterface.getEntry(plr)
+				local plrEntry = getEntry(plr)
 				if ret == "Health" then
 					actorEvent:Fire(plr, "inGame", nil, getPlayerHealth(plr))
 				elseif ret == "Character" then
@@ -650,7 +658,7 @@ local Aimbot = {}; do
 		local closestDistance, closestPlayer = minDistance or 9e9, nil
 
 		for i,v in playerList do
-			if v.Player and v.RootPart then
+			if localPlayer ~= v.Player and v.Player and v.RootPart then
 				if aimbotSettings.Wallcheck and self:Wallcheck(v.Player) then continue end 
 				local screenPos, vis = self:WorldToScreen(v.RootPart)
 				local distanceFromMouse = (Vector2.new(mouse.X, mouse.Y + 36) - Vector2.new(screenPos.X, screenPos.Y + 36)).Magnitude
@@ -743,11 +751,13 @@ local UI = {}; do
 		self:SetColor(RenderColorOption["WindowBG"], Color3.new(0.05, 0.05, 0.05), 1)
 		self:SetStyle("WindowBorderSize", 1)
 		
+		self:CreateTabs()
+
 		return self
 	end
 
 	function UI:CreateTabs()
-		local tabsTable = {}; for i,v in self.Tabs do tabsTable[i] = v end; table.clear(self.Tabs)
+		local tabsTable = {}; for i,v in self.Tabs do tabsTable[i] = v end; table.clear(self.Tabs); if #tabsTable == 0 then self.Tabs = nil return end
 		for i,v in tabsTable do
 			local tab = self.TabMenu:Add(v)
 			self.Tabs[v] = tab 
@@ -827,7 +837,14 @@ local UI = {}; do
 	end
 
 	function UI:CreateLabel(name, tab)
-		local obj = self:CreateObject({Tab = tab; Name = name; Type = "Label"})
+		local labelName, obj = "Label"..name, nil;
+		if self.Tabs then
+			local tab = self.Tabs[tab]; if not tab then return error'no tab found under name: '..name end
+			self.Objects[tab][labelName] = tab:Label(name)
+		else
+			self.Objects[labelName] = self.Window:Label(name)
+		end
+		
 		table.insert(self.Separators, self.Window:Separator())
 	end
 
@@ -839,7 +856,7 @@ local UI = {}; do
 	end
 end
 
-uiObject = UI.new("x_up Universal")
+local uiObject = UI.new("x_up Universal")
 
 --// ui toggles
 uiObject:CreateLabel("Toggles", "ESP")
