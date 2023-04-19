@@ -69,7 +69,7 @@ local defaultProperties = {
 	}
 }
 
-local playerList, connects, colors, games, espSettings, aimbotSettings = {}, {}, {
+local playerList, connects, pfPlayerTable, colors, games, espSettings, aimbotSettings = {}, {}, {}, {
 	HealthMax = Color3.new(0, 1, 0);
 	HealthMin = Color3.new(1, 0, 0);
 	White = Color3.new(1,1,1)
@@ -109,7 +109,11 @@ getgenv().Destroy = function()
 	getgenv().Destroy = nil
 
 	if games.PF then
-		actorEvent:Fire(nil, "Destroy")
+		task.spawn(function()
+			actorEvent:Fire("Destroy")
+			task.wait()
+			table.clear(pfPlayerTable)
+		end)
 	end
 
 	if window then window:Remove() end
@@ -124,8 +128,6 @@ end
 local customCharacterFuncs = {}
 
 if games.PF then do
-	local pfPlayerTable = {}
-
 	customCharacterFuncs.characterAdded = SynSignal.new()
 	customCharacterFuncs.characterRemoving = SynSignal.new()
 
@@ -258,6 +260,13 @@ if games.BB then
 	customCharacterFuncs.getTeam = getTeam
 	customCharacterFuncs.getCharacter = getCharacter
 	customCharacterFuncs.getRoot = function(character) return character:WaitForChild("Root", 3) end
+	customCharacterFuncs.getHealth = function(player)
+		local character = getCharacter(player); if not character then return 0, 100 end
+		local hp = character and character:WaitForChild("Health", 1); if not hp then return 0,100 end
+		local maxHP = hp:FindFirstChild("MaxHealth"); if not maxHP then return 0,100 end
+		return math.floor(hp.Value + 0.5), math.floor(maxHP.Value + 0.5)
+	end
+
 end
 
 local Player = {}; do
@@ -328,32 +337,18 @@ local Player = {}; do
 	end
 
 	function Player:GetHealth()
-		if customCharacterFuncs.getHealth then
-			local hp = pfPlayers[self.Name] and pfPlayers[self.Name].Health or 0
-			return math.floor(hp + 0.5), 100
-		elseif games.BB then
-			local hp = self.Character and self.Character:WaitForChild("Health", 1); if not hp then return 100,100 end
-			local maxHP = hp:FindFirstChild("MaxHealth"); if not maxHP then return 100,100 end
-			return math.floor(hp.Value + 0.5), math.floor(maxHP.Value + 0.5)
-		elseif self.Humanoid then
-			return self.Humanoid.Health, self.Humanoid.MaxHealth
-		end
-		return 100,100
+		return customCharacterFuncs.getHealth and customCharacterFuncs.getHealth(self.Player) or self.Humanoid and self.Humanoid.Health, self.Humanoid.MaxHealth or 100,100
 	end
 
 	function Player:GetTeam()
-		if games.BB then
-			return customCharacterFuncs.getTeam(self.Player)
-		end
-		return self.Player.Team ~= nil and self.Player.Team.Name or nil
-	end
+		return (customCharacterFuncs.getTeam and customCharacterFuncs.getTeam(self.Player)) or (self.Player.Team ~= nil and self.Player.Team.Name) or nil
 
 	function Player:GetHeldTool()
 		if self.Character then
 			local t = game.FindFirstChildOfClass(self.Character, "Tool")
 			return t and t.Name or "N/A"
 		end
-		return ""
+		return "N/A"
 	end
 
 	function Player:UpdateHealth()
