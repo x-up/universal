@@ -117,31 +117,33 @@ getgenv().Destroy = function()
 end
 
 local actor, actorEvent; if games.PF then
-	for i,v in getactors() do if v.Name == "lol" then actor = v break end end; if not actor then return end
+	for i,v in getactors() do if v.Name == "lol" then actor = v break end end; if not actor then return error("no actor, pf no workie :(") end
 	actorEvent = getluastate(actor).Event
 end
 
-if games.PF and not actor then return error("no actor, pf no workie :(") end
+local customCharacterFuncs = {}
 
-local pfPlayers = {}
 if games.PF then do
-	connects["pfActorEvent"] = actorEvent:Connect(function(plr, event, char, health)
-		local first = false; if not pfPlayers[plr.Name] then first = true pfPlayers[plr.Name] = {Character = nil, Health = nil} end
-		if event == "inGame" then
-			if health then 
-				pfPlayers[plr.Name].Health = health 
-			end
-			if char then 
-				pfPlayers[plr.Name].Character = char
-			end
-		elseif event == "leftGame" then
-			pfPlayers[plr.Name] = nil
+	local pfPlayerTable = {}
+
+	customCharacterFuncs.characterAdded = SynSignal.new()
+	customCharacterFuncs.characterRemoving = SynSignal.new()
+
+	connects["pfUpdateEvent"] = actorEvent:Connect(function(event, ...)
+		local args = {...}
+		if event == "Update" then
+			pfPlayerTable = args[1]
+		elseif event == "CharacterAdded" then
+			customCharacterFuncs.characterAdded:Fire(args[2], args[3])
+		elseif event == "CharacterRemoving" then
+			customCharacterFuncs.characterRemoving:Fire(args[2])
 		end
 	end)
-	
+
 	do
 		syn.run_on_actor(actor, [[
 			local connects = {}
+			local eventTable = {}
 
 			local actorEvent = getluastate(actor).Event
 
@@ -152,7 +154,9 @@ if games.PF then do
 			local repInterface = rawget(_cache, "ReplicationInterface"); if not repInterface then return error'no pf rI' end
 			local repEvents = rawget(_cache, "ReplicationEvents"); if not repEvents then return error'no pf rE' end
 
-			local playerTable = debug.getupvalue(rawget(repInterface, "getEntry"), 1); if not playerTable then return 'no pf pT' end
+			local onPlayerDied, onPlayerSpawned = rawget(playerStatusEvents, "onPlayerDied"), rawget(playerStatusEvents, "onPlayerSpawned"); if not onPlayerDied or not onPlayerSpawned then return error'no pf update funcs' end
+
+			local playerTable = debug.getupvalue(rawget(repInterface, "getEntry"), 1); if not playerTable then return error'no pf pT' end
 
 			local function getEntry(plr) return playerTable[plr] end
 
@@ -169,54 +173,66 @@ if games.PF then do
 				return rawget(healthState, "health0"), rawget(healthState, "maxhealth")
 			end
 
-			connects["pfActorEvent"] = actorEvent:Connect(function(plr, ret)
-				local plrEntry = getEntry(plr)
-				if ret == "Health" then
-					actorEvent:Fire(plr, "inGame", nil, getPlayerHealth(plr))
-				elseif ret == "Character" then
-					actorEvent:Fire(plr, "inGame", getCharacterModel(plr), nil)
-				elseif ret == "Destroy" then
-					for i,v in connects do v:Disconnect() end table.clear(connects) connects = nil
+			connects["CharacterAdded"] = onPlayerSpawned:Connect(function(entry)
+				local player = rawget(entry, "_player")
+				actorEvent:Fire("CharacterAdded", player, getCharacterModel(entry))
+			end)
+
+			connects["CharacterRemoving"] = onPlayerDied:Connect(function(entry)
+				local player = rawget(entry, "_player")
+				actorEvent:Fire("CharacterRemoving", player)
+			end)
+
+			connects["PFUpdate"] = game:GetService("RunService").RenderStepped:Connect(function()
+				for player, entry in playerTable do
+					local alive = isAlive(entry)
+					local characterModel = getCharacterModel(entry)
+					local health, maxHealth = getPlayerHealth(entry)
+
+					eventTable[player] = {
+						Character = characterModel;
+						Health = health;
+						MaxHealth = maxHealth;
+						Alive = alive;
+					}
 				end
+				actorEvent:Fire("Update", eventTable)
 			end)
 
-			connects["pfPlayerSpawned"] = playerStatusEvents.onPlayerSpawned:Connect(function(plr)
-				actorEvent:Fire(plr, "inGame", getCharacterModel(plr), getPlayerHealth(plr))
-			end)
-
-			connects["pfPlayerDied"] = playerStatusEvents.onPlayerDied:Connect(function(plr)
-				actorEvent:Fire(plr, "inGame", nil, nil)
-			end)
-
-			connects["pfPlayerDied"] = repEvents.onEntryRemoved:Connect(function(plr)
-				actorEvent:Fire(plr, "leftGame")
-			end)
-
-			repInterface.operateOnAllEntries(function(plr, plrEntry) 
-				if plrEntry:isAlive() then
-					actorEvent:Fire(plr, "inGame", getCharacterModel(plr), getPlayerHealth(plr))
-				else
-					actorEvent:Fire(plr, "inGame", nil, nil)
+			connects["pfActorEvent"] = actorEvent:Connect(function(event, ...)
+				if event == "Destroy" then
+					for i,v in connects do v:Disconnect() end
+					table.clear(connects)
+					table.clear(eventTable)
 				end
 			end)
 		]])
 	end
 
-	for i,v in players:GetPlayers() do if v == Player then continue end actorEvent:Fire(v, "Character") end
+	customCharacterFuncs.getCharacter = function(player) 
+		local entry = playerTable[player];
+		return entry and entry.Character
+	end
+	customCharacterFuncs.getRoot = function(character) 
+		return character:WaitForChild("Torso", 3) 
+	end
+	customCharacterFuncs.getHealth = function(player) 
+		local entry = playerTable[player];
+		return entry and entry.Health or 100, entry and entry.MaxHealth or 100
+	end
 end end
 
 
-local bbFuncs = { ["characterAdded"] = nil; ["characterRemoving"] = nil; ["getCharacter"] = nil; ["getTeam"] = nil; }
 if games.BB then
 	local TS = require(game:GetService("ReplicatedStorage").TS) if typeof(TS) == "function" then TS = debug.getupvalue(TS, 2) end
 	TS = getupvalue(getrawmetatable(TS).__index, 1); if typeof(TS) ~= "table" then return error"TS not table" end
 
-	local getCharacterFunc = rawget(rawget(TS, "Characters"), "GetCharacter"); if not getCharacterFunc then return error"GetCharacter not found" end
-	local playerTable = debug.getupvalue(getCharacterFunc, 1); if not playerTable then return error"playerTable not found" end
+	local characters = rawget(TS, "Characters"); if not characters then return error 'bb characters not found' end
+	local getCharacterFunc = rawget(characters, "GetCharacter"); if not getCharacterFunc then return error'bb getCharacter not found' end
+	local playerTable = debug.getupvalue(getCharacterFunc, 1); if not playerTable then return error'bb playerTable not found' end
 
 	local function getCharacter(player)
-		local char = playerTable[player]; if not char then return end
-		return char
+		return playerTable[player]
 	end
 
 	local function getTeam(player)
@@ -226,10 +242,22 @@ if games.BB then
 		end
 	end
 
-	bbFuncs.characterAdded = TS.Characters.CharacterAdded
-	bbFuncs.characterRemoving = TS.Damage.CharacterKilled
-	bbFuncs.getTeam = getTeam
-	bbFuncs.getCharacter = getCharacter
+
+	local characterAddedSignal, characterRemovingSignal = SynSignal.new(), SynSignal.new()
+	customCharacterFuncs.characterAdded = characterAddedSignal
+	customCharacterFuncs.characterRemoving = characterRemovingSignal
+
+	connects["bbCharacterAdded"] = rawget(characters, "CharacterAdded"):Connect(function(plr, char)
+		characterAddedSignal:Fire(plr, char)
+	end)
+
+	connects["bbCharacterRemoving"] = rawget(rawget(TS, "Damage"), "CharacterKilled"):Connect(function(character, _, plr)
+		characterRemovingSignal:Fire(plr)
+	end)
+
+	customCharacterFuncs.getTeam = getTeam
+	customCharacterFuncs.getCharacter = getCharacter
+	customCharacterFuncs.getRoot = function(character) return character:WaitForChild("Root", 3) end
 end
 
 local Player = {}; do
@@ -256,30 +284,24 @@ local Player = {}; do
 		self.Connects = {}
 		self.Points = {}
 
-		if games.PF then
-			self.Connects["CharacterUpdate"] = actorEvent:Connect(function(plr, event, char, health)
-				if player ~= plr then return end
-				if char ~= nil then
-					self.Character = char
-					self:SetupCharacter(self.Character)
-				elseif char and char.Parent ~= nil then
-					for i,v in {"Character", "RootPart", "Humanoid"} do self[v] = nil end
-				end
-			end)
-		elseif games.BB then
-			self.Connects["CharacterAdded"] = bbFuncs.characterAdded:Connect(function(plr, char) if plr == player then self:SetupCharacter(char) end end)
-
-			self.Connects["CharacterRemoving"] = bbFuncs.characterRemoving:Connect(function(character, _, plr)
+		if customCharacterFuncs.characterAdded and customCharacterFuncs.characterRemoving then
+			self.Connects["CharacterAdded"] = customCharacterFuncs.characterAdded:Connect(function(plr, char)
 				if plr == player then
-					for i,v in {"Character", "RootPart", "Humanoid"} do self[v] = nil end
+					self:SetupCharacter(char)
+				end 
+			end)
+
+			self.Connects["CharacterRemoving"] = customCharacterFuncs.characterRemoving:Connect(function(plr)
+				if plr == player then 
+					self:Died() 
 				end
 			end)
 		else
-			self.Connects["CharacterAdded"] = player.CharacterAdded:Connect(function(char) self:SetupCharacter(player.Character) end)
+			self.Connects["CharacterAdded"] = player.CharacterAdded:Connect(function(char) 
+				self:SetupCharacter(player.Character) 
+			end)
 			self.Connects["CharacterRemoving"] = player.CharacterRemoving:Connect(function() 
-				for i,v in {"Character", "RootPart", "Humanoid"} do
-					self[v] = nil
-				end
+				self:Died()
 			end)
 		end
 		self.Connects["TeamChanged"] = player:GetPropertyChangedSignal("Team"):Connect(function()
@@ -293,31 +315,20 @@ local Player = {}; do
 		return self
 	end
 
+	function Player:Died()
+		for i,v in {"Character", "RootPart", "Humanoid"} do self[v] = nil end
+	end
+
 	function Player:GetCharacter()
-		if games.PF and pfPlayers[self.Player.Name] then
-			return pfPlayers[self.Player.Name].Character
-		elseif games.BB then
-			return bbFuncs.getCharacter(self.Player)
-		else
-			return self.Player.Character
-		end
+		return customCharacterFuncs.getCharacter and customCharacterFuncs.getCharacter(self.Player) or self.Player.Character
 	end
 
 	function Player:GetRootPart()
-		if self.Character then
-			if games.PF then
-				return self.Character:WaitForChild("Torso", 3)
-			elseif games.BB then
-				return self.Character:WaitForChild("Root", 3)
-			else
-				return self.Character:WaitForChild("HumanoidRootPart", 3) 
-			end
-		end
-		return nil
+		return self.Character and (customCharacterFuncs.getRoot and customCharacterFuncs.getRoot(self.Character) or self.Character:WaitForChild("HumanoidRootPart", 3)) or nil
 	end
 
 	function Player:GetHealth()
-		if games.PF then
+		if customCharacterFuncs.getHealth then
 			local hp = pfPlayers[self.Name] and pfPlayers[self.Name].Health or 0
 			return math.floor(hp + 0.5), 100
 		elseif games.BB then
@@ -332,7 +343,7 @@ local Player = {}; do
 
 	function Player:GetTeam()
 		if games.BB then
-			return bbFuncs.getTeam(self.Player)
+			return customCharacterFuncs.getTeam(self.Player)
 		end
 		return self.Player.Team ~= nil and self.Player.Team.Name or nil
 	end
@@ -559,7 +570,7 @@ local Player = {}; do
 
 		if not self.RootPart then
 			self.RootPart = self:GetRootPart()
-			if not self.RootPart then for i,v in {"Character", "RootPart", "Humanoid"} do self[v] = nil end return end
+			if not self.RootPart then self:Died() return end
 		end
 		self.Distance = (self.RootPart.Position - camera.CFrame.Position).Magnitude
 
