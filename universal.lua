@@ -222,20 +222,17 @@ local customGames = {
 		end;
 		getHealth = function(player) 
 			local entry = playerTable[player];
-			return entry and entry.Health or 100, entry and entry.MaxHealth or 100
+			return entry and entry.Health or 0, entry and entry.MaxHealth or 100
 		end;
 	};
 	[1168263273] = { -- bad business
 		init = function()
-			playerTable = {}
 			local TS = require(game:GetService("ReplicatedStorage").TS) if typeof(TS) == "function" then TS = debug.getupvalue(TS, 2) end
 			TS = getupvalue(getrawmetatable(TS).__index, 1); if typeof(TS) ~= "table" then return error'ERROR [BB-A]' end
 
 			local characters = rawget(TS, "Characters"); if not characters then return error'ERROR [BB-B]' end
 			local getCharacterFunc = rawget(characters, "GetCharacter"); if not getCharacterFunc then return error'ERROR [BB-C]' end
 			playerTable = debug.getupvalue(getCharacterFunc, 1); if not playerTable then return error'ERROR [BB-D]' end
-
-
 
 			local characterAddedSignal, characterRemovingSignal = SynSignal.new(), SynSignal.new()
 			customCharacterFuncs.characterAdded = characterAddedSignal
@@ -282,6 +279,110 @@ if customGames[game.GameId] then
 end
 
 
+--// start aimbot
+local Aimbot = {}; do 
+	Aimbot.__index = Aimbot
+
+	function Aimbot.new()
+		local self = {}; setmetatable(self, Aimbot)
+
+		self.ClosestPlayer = {
+			Player = nil;
+			Visible = false;
+			WallsInbetween = {};
+		}
+
+		return self
+	end
+
+	function Aimbot:IsOnScreen(vector2)
+		if typeof(vector2) == "Instance" and vector2:IsA("Part") then vector2 = self:WorldToScreen(vector2) end
+		return vector2.X > 0 and vector2.X < viewportSize.X and vector2.Y > 0 and vector2.Y < viewportSize.Y
+	end
+
+	function Aimbot:WorldToScreen(part)
+		local screenPoint = worldtoscreen({part.Position})[1]
+		return screenPoint, self:IsOnScreen(screenPoint)
+	end
+
+	function Aimbot:Wallcheck(enemyPlayerObj)
+		if not localPlayerObj or not localPlayerObj.RootPart then return false end
+		if not enemyPlayerObj or not localPlayerObj.RootPart then return false end
+
+		local localCharacter = lPlayerObj.Character; if not localCharacter then return false end
+		local enemyCharacter = enemyPlayerObj.Character; if not enemyCharacter then return false end
+
+		local list = {localCharacter, enemyCharacter}
+		local obscuringTargets = getPartsObscuringTarget(list, list)
+
+		return obscuringTargets
+	end
+	
+	function Aimbot:GetClosestPlayer(minDistance)
+		local closestDistance, closestPlayer, closestVisible = minDistance or 9e9, nil, false
+
+		for i,v in playerList do
+			if playerList[localPlayer] ~= v.Player and v.Player and v.RootPart then
+				if aimbotSettings.Wallcheck then closestVisible = self:Wallcheck(v.Player) if not #closestVisible == 0 then continue end end 
+				if v.DistanceFromMouse <= closestDistance and vis then
+					closestPlayer = v
+					closestDistance = closestDistance
+				end
+			end
+		end
+		self.ClosestPlayer = {
+			Player = closestPlayer;
+			Visible = not #closestVisible == 0;
+			WallsInbetween = closestVisible
+
+		}
+		return closestPlayer
+	end
+
+	function Aimbot:AimTowardsPart(part, data)
+		if data then
+			local WindForce = Vector2.zero
+			local Velocity = Vector2.zero
+			while (true) do
+				-- // Check distance
+				local Distance = (Data.Destination - Data.Start).Magnitude
+				if (Distance < 1) then
+					break
+				end
+
+				-- // Vars
+				local FM = math.min(Data.Fluctuation, Distance)
+
+				-- // Random wind
+				WindForce = WindForce / sqrt3
+				if (Distance >= Data.DampedDistance) then
+					WindForce = WindForce + self:RandomWind(FM)
+				else
+					Data.StepSize = Data.StepSize < 3 and (math.random() * 3 + 3) or (Data.StepSize / sqrt5)
+				end
+
+				-- // Workout velocity
+				local GravityForce = Data.Gravity * (Data.Destination - Data.Start) / Distance
+				Velocity = Velocity + WindForce + GravityForce
+
+				-- // Velocity clip threshold
+				if (Velocity.Magnitude > Data.StepSize) then
+					local VelocityClip = Data.StepSize / 2 + math.random() * Data.StepSize / 2
+					Velocity = Velocity.Unit * VelocityClip
+				end
+
+			end
+
+			-- // Return
+			return Data.Start
+		end
+	end
+end
+local aimObj = Aimbot.new()
+--// end aimbot
+
+
+
 local Player = {}; do
 	Player.__index = Player
 
@@ -298,6 +399,8 @@ local Player = {}; do
 		self.MaxHealth = nil
 		self.Distance = 0
 		self.DistanceFromMouse = 9e9
+		self.OnScreen = false
+		self.Visible = false
 		self.Name = player.Name
 		self.Team = self:GetTeam()
 		self.Highlight = Instance.new("Highlight", highlightFolder)
@@ -433,10 +536,7 @@ local Player = {}; do
 							self.Points[part.Name.."1"] = PointInstance.new(motor6D.Part0)
 							self.Points[part.Name.."2"] = PointInstance.new(motor6D.Part1)
 
-							local skeletonLine = LineDynamic.new(self.Points[part.Name.."1"], self.Points[part.Name.."2"])
-							skeletonLine.Thickness = 2
-							skeletonLine.Outlined = true
-							skeletonLine.Visible = false
+							local skeletonLine = LineDynamic.new(self.Points[part.Name.."1"], self.Points[part.Name.."2"]); for i,v in defaultProperties.Line do skeletonLine[i] = v end skeletonLine.Outlined = true
 							
 							self.SkeletonDrawings[part.Name] = skeletonLine
 						end
@@ -471,10 +571,7 @@ local Player = {}; do
 					self.Points[part.Name.."1"] = PointInstance.new(motor6D.Part0)
 					self.Points[part.Name.."2"] = PointInstance.new(motor6D.Part1)
 
-					local skeletonLine = LineDynamic.new(self.Points[part.Name.."1"], self.Points[part.Name.."2"])
-					skeletonLine.Thickness = 2
-					skeletonLine.Outlined = true
-					skeletonLine.Visible = false
+					local skeletonLine = LineDynamic.new(self.Points[part.Name.."1"], self.Points[part.Name.."2"]); for i,v in defaultProperties.Line do skeletonLine[i] = v end skeletonLine.Outlined = true
 					
 					self.SkeletonDrawings[part.Name] = skeletonLine
 				end
@@ -650,103 +747,11 @@ local WindMouse = {}; do
 	end
 end
 
-
---// start aimbot
-local Aimbot = {}; do 
-	Aimbot.__index = Aimbot
-
-	function Aimbot.new()
-		local self = {}; setmetatable(self, Aimbot)
-
-		self.ClosestPlayer = nil;
-
-		return self
-	end
-
-	function Aimbot:IsOnScreen(vector2)
-		if typeof(vector2) == "Instance" and vector2:IsA("Part") then vector2 = self:WorldToScreen(vector2) end
-		return vector2.X > 0 and vector2.X < viewportSize.X and vector2.Y > 0 and vector2.Y < viewportSize.Y
-	end
-
-	function Aimbot:WorldToScreen(part)
-		local screenPoint = worldtoscreen({part.Position})[1]
-		return screenPoint, self:IsOnScreen(screenPoint)
-	end
-
-	function Aimbot:Wallcheck(player)
-		local localPlayerObj = playerlist[localPlayer.Name]; if not localPlayerObj or not localPlayerObj.RootPart then return false end
-		local enemyPlayerObj = playerlist[player.Name]; if not enemyPlayerObj then return false end
-
-		local localCharacter = lPlayerObj.Character; if not localCharacter then return false end
-		local enemyCharacter = enemyPlayerObj.Character; if not enemyCharacter then return false end
-
-		local list = {localCharacter, enemyCharacter}
-		local obscuringTargets = getPartsObscuringTarget(list, list)
-
-		return not #obscuringTargets <= 1
-	end
-	
-	function Aimbot:GetClosestPlayer(minDistance)
-		local closestDistance, closestPlayer = minDistance or 9e9, nil
-
-		for i,v in playerList do
-			if localPlayer ~= v.Player and v.Player and v.RootPart then
-				if aimbotSettings.Wallcheck and self:Wallcheck(v.Player) then continue end 
-				if v.DistanceFromMouse <= closestDistance and vis then
-					closestPlayer = v
-					closestDistance = closestDistance
-				end
-			end
-		end
-		
-		return closestPlayer
-	end
-
-	function Aimbot:AimTowardsPart(part, data)
-		if data then
-			local WindForce = Vector2.zero
-			local Velocity = Vector2.zero
-			while (true) do
-				-- // Check distance
-				local Distance = (Data.Destination - Data.Start).Magnitude
-				if (Distance < 1) then
-					break
-				end
-
-				-- // Vars
-				local FM = math.min(Data.Fluctuation, Distance)
-
-				-- // Random wind
-				WindForce = WindForce / sqrt3
-				if (Distance >= Data.DampedDistance) then
-					WindForce = WindForce + self:RandomWind(FM)
-				else
-					Data.StepSize = Data.StepSize < 3 and (math.random() * 3 + 3) or (Data.StepSize / sqrt5)
-				end
-
-				-- // Workout velocity
-				local GravityForce = Data.Gravity * (Data.Destination - Data.Start) / Distance
-				Velocity = Velocity + WindForce + GravityForce
-
-				-- // Velocity clip threshold
-				if (Velocity.Magnitude > Data.StepSize) then
-					local VelocityClip = Data.StepSize / 2 + math.random() * Data.StepSize / 2
-					Velocity = Velocity.Unit * VelocityClip
-				end
-
-			end
-
-			-- // Return
-			return Data.Start
-		end
-	end
-end
---// end aimbot
-
 runService:BindToRenderStep("x_upESP", 200, function()
 	for i,v in playerList do
 		v:Update()
 	end
+	aimObj:GetClosestPlayer()
 end)
 
 
@@ -879,7 +884,7 @@ local UI = {}; do
 		end
 
 		if objProperties.Properties and typeof(objProperties) == "table" then
-			for i,v in pairs(objProperties.Properties) do object[i] = v end
+			for i,v in objProperties.Properties do object[i] = v end
 			if objProperties.Properties.Checked then
 				objProperties.Callback(true)
 			end
@@ -1021,7 +1026,7 @@ uiObject.Tabs["ESP"]:Separator()
 
 --// settings
 local fileList = {}
-local function setupFileList() fileList = listfiles("x_up/settings/esp/") for i,v in pairs(fileList) do fileList[i] = v:split("\\")[4]:gsub(".json", "") end end
+local function setupFileList() fileList = listfiles("x_up/settings/esp/") for i,v in fileList do fileList[i] = v:split("\\")[4]:gsub(".json", "") end end
 if not isfolder("x_up/settings/esp/") then makefolder("x_up/settings/esp/") end
 if not isfile("x_up/settings/esp/Default.json") then writefile("x_up/settings/esp/Default.json", game:GetService("HttpService"):JSONEncode(espSettings)) end
 
@@ -1146,12 +1151,11 @@ end))
 --// end connects
 
 
-
 syn.toast_notification({
 	Type = ToastType.Success;
 	Duration = 3;
 	Title = "x_up Universal";
-	Content = ("Successfully loaded x_up Universal in %s seconds"):format(((tick() - startTime)..("")):sub(1, 5));
+	Content = ("Successfully loaded x_up Universal in %s seconds"):format(tostring((tick() - startTime)):format("%.3f"));
 	IconColor = true;
 })
 
