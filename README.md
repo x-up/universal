@@ -8,7 +8,6 @@ loadstring(syn.request({Url = "https://raw.githubusercontent.com/x-up/universal/
 
 # To do:
 * Add an aimbot module
-* Fix Phantom Forces support
 
 
 # Credits
